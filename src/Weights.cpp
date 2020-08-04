@@ -1,65 +1,50 @@
-package com.troy.cwteams;
 
-import org.apache.commons.collections4.map.HashedMap;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
+#include "Weights.h"
 
-import java.io.File;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.OptionalDouble;
-import java.util.stream.IntStream;
+#include "Main.h"
 
-public class Weights
+namespace CWTeams
 {
-	private final Map<String, WeightsData> weightsMap;
 
-	private Weights()
+	WeightsData Weights::Select(const TeamSizes& teamSizes)
 	{
-		this.weightsMap = new HashMap<>();
-	}
-
-	public WeightsData select(int[] teamSizes)
-	{
-		StringBuilder querySb = new StringBuilder();
-		for (int i = 0; i < teamSizes.length; i++)
+		std::stringstream ss;
+		for (int i = 0; i < teamSizes.size(); i++)
 		{
-			querySb.append(teamSizes[i]);
-			if ( i < teamSizes.length - 1)
+			ss << teamSizes[i];
+			if ( i < teamSizes.size() - 1)
 			{
-				querySb.append("v");
+				ss << "v";
 			}
 		}
-		String query = querySb.toString();
-		Main.info("Searching for situation \"" + query + "\" in the situations pool");
+		std::string query = ss.str();
+		info("Searching for situation \"" + query + "\" in the situations pool");
 		WeightsData data = weightsMap.get(query);
 		if (data == null)
 		{
 			OptionalDouble optionalAverage = IntStream.of(teamSizes).mapToDouble(Double::valueOf).average();
-			if (!optionalAverage.isPresent()) { Main.fatal("Failed to average numbers " + Arrays.toString(teamSizes)); return null; }
+			if (!optionalAverage.isPresent()) { CW_FATAL("Failed to average numbers " + Arrays.toString(teamSizes)); return null; }
 
 			String oldQuery = query;
 			query = ((int) (Math.floor(optionalAverage.getAsDouble() + 0.49999))) + "v";
 
-			Main.info("Failed to find \"" + oldQuery + "\". Searching for situation \"" + query + "\" in the situations pool");
+			info("Failed to find \"" + oldQuery + "\". Searching for situation \"" + query + "\" in the situations pool");
 			data = weightsMap.get(query);
 			if (data == null)
 			{
-				Main.fatal("Failed to find situation \"" + query + "\" after 2 attempts. Also tried \"" + oldQuery + "\"");
+				CW_FATAL("Failed to find situation \"" + query + "\" after 2 attempts. Also tried \"" + oldQuery + "\"");
 				return null;
 			}
 		}
 
-		Main.success("Found situation \"" + query + "\" in the situations pool");
-		Main.info("Applying weights: pvp: " + data.pvp + ", gamesense: " + data.gamesense + ", teamwork: " + data.teamwork);
+		success("Found situation \"" + query + "\" in the situations pool");
+		info("Applying weights: pvp: " + data.pvp + ", gamesense: " + data.gamesense + ", teamwork: " + data.teamwork);
 		return data;
 	}
 
-	public static Weights load(File file)
+	void Weights::Load(const std::string& file, Weights& result)
 	{
+		result.weightsMap.clear();
 		try
 		{
 			Workbook workbook = WorkbookFactory.create(file);
@@ -69,8 +54,6 @@ public class Weights
 			int pvpCol = ExcelUtils.getCol(sheet, "PVP");
 			int gamesenseCol = ExcelUtils.getCol(sheet, "Gamesense");
 			int teamworkCol = ExcelUtils.getCol(sheet, "Teamwork");
-
-			Weights result = new Weights();
 
 			for (int rowInt = 1; sheet.getRow(rowInt) != null; rowInt++)
 			{
@@ -82,34 +65,20 @@ public class Weights
 				double sum = pvpWeight + gamesenseWeight + teamworkWeight;
 				if (sum != 1.0)
 				{
-					Main.fatal("Weights don't sum to 1! In situation row \"" + situation + "\" pvp: " + pvpWeight + ", gamesense: " + gamesenseWeight + ", teamwork: " + teamworkWeight + " Sum to: " + sum + "!");
+					CW_FATAL("Weights don't sum to 1! In situation row \"" + situation + "\" pvp: " + pvpWeight + ", gamesense: " + gamesenseWeight + ", teamwork: " + teamworkWeight + " Sum to: " + sum + "!");
 				}
-				Main.success("Read situation weights: \"" + situation + "\" = pvp: " + pvpWeight + ", gamesense: " + gamesenseWeight + ", teamwork: " + teamworkWeight);
+				CW_SUCCESS("Read situation weights: \"" + situation + "\" = pvp: " + pvpWeight + ", gamesense: " + gamesenseWeight + ", teamwork: " + teamworkWeight);
 				result.weightsMap.put(situation, new WeightsData(pvpWeight, gamesenseWeight, teamworkWeight));
 			}
 
-			Main.success("Parsed " + result.weightsMap.size() + " weights successfully");
+			CW_SUCCESS("Parsed " + result.weightsMap.size() + " weights successfully");
 			workbook.close();
 			return result;
 		}
-		catch (Exception e)
+		catch (std::exception& e)
 		{
-			Main.error("Exception raised while parsing weights file " + file);
-			e.printStackTrace();
-			System.exit(1);
-			return null;
+			CW_FATAL("Exception raised while parsing weights file {}: {}", file, e.what());
 		}
 	}
 
-	public static class WeightsData
-	{
-		public double pvp, gamesense, teamwork;
-
-		public WeightsData(double pvp, double gamesense, double teamwork)
-		{
-			this.pvp = pvp;
-			this.gamesense = gamesense;
-			this.teamwork = teamwork;
-		}
-	}
 }

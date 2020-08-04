@@ -1,161 +1,208 @@
-package com.troy.cwteams;
 
-import java.io.PrintStream;
-import java.text.NumberFormat;
-import java.util.*;
+#include "GenerateTeams.h"
 
-public class GenerateTeams
+namespace CWTeams
 {
 
-	private static long teamValueFailedCount = 0, playerRestrictionsFailedCount = 0;
-	private static final List<int[]> teamResults = new ArrayList<int[]>();
 
-	public static void gen(List<CWPlayer> players, List<PlayerRestrictor.PlayerRestriction> restrictions, Weights weights, double maxDev, int limitOutput, int teamCount, PrintStream output, boolean sort, int timeoutSeconds)
+	TeamIterator GenData::begin() { return TeamIterator(this); }
+	TeamIterator GenData::end() { return TeamIterator(this, Players.size(), Sizes.size()); }
+	ConstTeamIterator GenData::begin() const { return ConstTeamIterator(this); }
+	ConstTeamIterator GenData::end() const { return ConstTeamIterator(this, Players.size(), Sizes.size()); }
+	
+
+	Team TeamIterator::operator*()
 	{
-		final long TIMEOUT = timeoutSeconds * 1000;
-		int[] teamSizes = new int[teamCount];
-		for (int i = 0; i < players.size(); i++)
+		return { Data->Teams, PlayerIndex, Data->Sizes[TeamIndex] };
+	}
+
+	void TeamIterator::operator++() 
+	{
+		if (TeamIndex == Data->Sizes.size())
+			CW_FATAL("Iterator out of range");
+		TeamIndex++;
+		PlayerIndex += Data->Sizes[TeamIndex];
+	}
+
+	bool TeamIterator::operator!=(const TeamIterator& other)
+	{
+		return this->Data != other.Data || this->PlayerIndex != other.PlayerIndex;
+	}
+
+
+	Team ConstTeamIterator::operator*()
+	{
+		return { Data->Teams, PlayerIndex, Data->Sizes[TeamIndex] };
+	}
+
+	void ConstTeamIterator::operator++() 
+	{
+		if (TeamIndex == Data->Sizes.size())
+			CW_FATAL("Iterator out of range");
+		TeamIndex++;
+		PlayerIndex += Data->Sizes[TeamIndex];
+	}
+
+	bool ConstTeamIterator::operator!=(const ConstTeamIterator& other)
+	{
+		return this->Data != other.Data || this->PlayerIndex != other.PlayerIndex;
+	}
+	
+
+	long s_TeamValueFailedCount, s_PlayerRestrictionsFailedCount;
+	std::vector<TeamSet> s_TeamResults;
+
+
+	void GenerateTeams::Gen(GenParameters& params)
+	{
+		s_TeamValueFailedCount = 0;
+		s_PlayerRestrictionsFailedCount = 0;
+
+		std::uint64_t TIMEOUT = params.TimeoutSeconds * 1000;
+
+		GenData data { params.Players, params.Restrictions, params.Output };
+		data.Sizes.resize(params.TeamCount);
+		
+		for (int i = 0; i < params.Players.size(); i++)
 		{
-			teamSizes[i % teamSizes.length]++;
+			data.Sizes[i % data.Sizes.size()]++;
 		}
 
+		data.Weights = params.WeightsMap.Select(data.Sizes);
+		
 		{
-			StringBuilder sb = new StringBuilder();
-			sb.append("Match is set for: ");
-			for (int i = 0; i < teamSizes.length; i++)
+			std::stringstream ss;
+			ss << "Match is set for: ";
+			for (int i = 0; i < data.Sizes.size(); i++)
 			{
-				sb.append(teamSizes[i]);
-				if ( i < teamSizes.length - 1)
+				ss << data.Sizes[i];
+				if ( i < data.Sizes.size() - 1)
 				{
-					sb.append(" v ");
+					ss << " v ";
 				}
 			}
-			Main.info(sb.toString());
+			CW_INFO(ss.str());
 		}
-		Weights.WeightsData activeWeights = weights.select(teamSizes);
-		OptionalDouble optionalAverage = players.stream().map(player -> player.getOverall(activeWeights)).mapToDouble(Double::doubleValue).average();
-		if (!optionalAverage.isPresent())
-		{
-			Main.fatal("Players stream is empty!");
-		}
-		double averageTeamSize = (double) players.size() / (double) teamCount;
-		double averageTeamRaking = optionalAverage.getAsDouble() * averageTeamSize;
-		Main.info("Average team size is " + averageTeamSize + ". average team rating is " + averageTeamRaking + " +-" + maxDev);
+
+		double average = 0.0;
+		for (const auto& player : data.Players) average += player.GetOverall(data.Weights);
+		average /= data.Players.size();
+
+		double averageTeamSize = (double) data.Players.size() / (double) data.Sizes.size();
+		data.NeededTeamAverage = average * averageTeamSize;
+		CW_INFO("Average team size is {}. average team rating is {} +-{}", averageTeamSize, data.NeededTeamAverage, data.MaxTeamDev);
 
 
 		//The indices of tempPlayers correspond to the indices of players inside the players list
 		//Jumps of indices according to the values in teamSizes indicate teams
 		//IE if teamSizes = {2, 3, 2} then the first 2 indices in tempPlayers are on team #1 the next indices in tempPlayers are on team #2 etc
 		//This is done in a single 1d array to improve cache locality and thus performance
-		int[] tempPlayers = new int[players.size()];
-		for (int i = 0; i < tempPlayers.length; i++)
+		data.Teams.resize(data.Players.size());
+		for (int i = 0; i < data.Teams.size(); i++)
 		{
 			//Fill in the most basic team mapping
-			tempPlayers[i] = i;
+			data.Teams[i] = i;
 		}
 
 		//This set contains hashes of the team combos that we already tried so that we don't repeat
-		HashSet<Long> combinationsTried = new HashSet<Long>();
-		long start = System.currentTimeMillis();
-		long lastOption = 0;
+		std::set<std::uint64_t> combinationsTried;
+		std::chrono::time_point start = std::chrono::system_clock::now();
+		std::chrono::time_point lastOption = std::chrono::system_clock::now();
 
 		//Initialize counters to 0
 		long comboCount = 0;
-		teamValueFailedCount = 0;
-		playerRestrictionsFailedCount = 0;
-		Main.info("Searching for teams... this may take a while");
-		for (int validOptions = 0; validOptions < limitOutput; )
+		s_TeamValueFailedCount = 0;
+		s_PlayerRestrictionsFailedCount = 0;
+		CW_INFO("Searching for teams... this may take a while");
+		for (int validOptions = 0; validOptions < params.LimitOutput; )
 		{
-			shuffel(tempPlayers);
+			std::random_shuffle(data.Teams.begin(), data.Teams.end());
 			comboCount++;
-			long singleStart = System.currentTimeMillis();
-			while (!areTeamsValid(players, restrictions, activeWeights, tempPlayers, teamSizes, averageTeamRaking, maxDev))
+			std::chrono::time_point singleStart = std::chrono::system_clock::now();
+			while (!AreTeamsValid(data))
 			{
-				if (System.currentTimeMillis() - singleStart > TIMEOUT)
+				if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - singleStart).count() > TIMEOUT)
 				{
-					printResults(output, players, activeWeights, teamSizes);
-					Main.fatal("Failed to find more team combination after " + (TIMEOUT / 1000) + " seconds! Tried " + comboCount + " combinations to no avail");
+					PrintResults(data);
+					CW_FATAL("Failed to find more team combination after {} seconds! Tried {} combinations to no avail", TIMEOUT / 1000, comboCount);
 				}
-				shuffel(tempPlayers);
+				std::random_shuffle(data.Teams.begin(), data.Teams.end());
 				comboCount++;
 			}
-			long hash = getTeamsHash(players, tempPlayers, teamSizes);
-			if (!combinationsTried.contains(hash))
+			long hash = GetTeamsHash(data);
+			if (combinationsTried.find(hash) != combinationsTried.end())
 			{
 				//We found a valid configuration
-				lastOption = System.currentTimeMillis();
+				lastOption = std::chrono::system_clock::now();
 				validOptions++;
-				combinationsTried.add(hash);
-				if (sort)
+				combinationsTried.insert(hash);
+				if (params.Sort)
 				{
-					teamResults.add(Arrays.copyOf(tempPlayers, tempPlayers.length));
+					s_TeamResults.push_back(data.Teams);
 				}
 				else
 				{
-					printTeam(players, activeWeights, tempPlayers, teamSizes, output, validOptions);
+					PrintTeam(data, validOptions);
 				}
 
 			}
 			else
 			{
 				//Check for timeout in case we already found all possible teams
-				if (lastOption != 0 && (System.currentTimeMillis() - lastOption) > TIMEOUT)
+				if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - lastOption).count() > TIMEOUT)
 				{
-					Main.warn("Failed to find more team combinations after " + (TIMEOUT / 1000) + " seconds! Low search space? Exiting!");
+					CW_WARN("Failed to find more team combinations after {} seconds! Low search space? Exiting!", TIMEOUT / 1000);
 					break;
 				}
 
 			}
 		}
 
-		printResults(output, players, activeWeights, teamSizes);
-		double seconds = (System.currentTimeMillis() - start) / 1000.0;
-		Main.success("Generated " + combinationsTried.size() + " valid team possibilities in " + NumberFormat.getInstance().format(seconds) + " seconds");
-		Main.success("Evaluated " + NumberFormat.getInstance().format(comboCount) + " possible configurations");
-		Main.success("That's " + NumberFormat.getInstance().format(comboCount / seconds) + " configurations/second (" + NumberFormat.getInstance().format(seconds / comboCount * 1000_000_000.0) + " nano seconds / configuration) evaluated");
-		Main.success("Of the " + NumberFormat.getInstance().format(comboCount) + " attempted configurations, " +
-				NumberFormat.getInstance().format(teamValueFailedCount) + " had a value out of range, and " +
-				NumberFormat.getInstance().format(playerRestrictionsFailedCount) + " failed the restriction requirements");
+		PrintResults(data);
+		double seconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count() / 1000.0;
+		CW_SUCCESS("Generated {} valid team possibilities in {} seconds", combinationsTried.size(), seconds);
+		CW_SUCCESS("Evaluated {} possible configurations", comboCount);
+
+		CW_SUCCESS("That's {} configurations/second ({} nano seconds / configuration) evaluated",
+			comboCount / seconds, seconds / comboCount * 1000000000.0);
+		
+		CW_SUCCESS("Of the {} attempted configurations, {} had a value out of range, and {} failed the restriction requirements",
+			comboCount, s_TeamValueFailedCount, s_PlayerRestrictionsFailedCount);
 	}
 
-	private static void printResults(PrintStream output, List<CWPlayer> players, Weights.WeightsData weights, int[] teamSizes)
+	void GenerateTeams::PrintResults(GenData& data)
 	{
-		teamResults.sort(new Comparator<int[]>()
-		{
-			@Override
-			public int compare(int[] a, int[] b)
-			{
-				return -Double.compare(getTeamsDeltaStrength(players, weights, a, teamSizes), getTeamsDeltaStrength(players, weights, b, teamSizes));
-			}
+		std::sort(s_TeamResults.begin(), s_TeamResults.end(), [data](const TeamSet& a, const TeamSet& b) {
+			std::copy(a.begin(), a.end(), data.Teams.begin());
+			double aStrength = GetTeamsDeltaStrength(data);
+			std::copy(b.begin(), b.end(), data.Teams.begin());
+			return aStrength < GetTeamsDeltaStrength(data);
 		});
 		int i = 0;
-		for (int[] tempPlayers : teamResults)
+		for (auto& team : s_TeamResults)
 		{
-			printTeam(players, weights, tempPlayers, teamSizes, output, teamResults.size() - i++);
+			data.Teams = std::move(team);
+			PrintTeam(data, s_TeamResults.size() - i++);
 		}
 	}
 
-	public static double getTeamStrength(List<CWPlayer> players, Weights.WeightsData weights, int[] tempPlayers, int playerIndex, int teamCount)
+	double GenerateTeams::GetTeamStrength(const GenData& data, const Team& team)
 	{
 		double teamStrength = 0.0;
-		for (int i = playerIndex; i < playerIndex + teamCount; i++)
+		for (auto playerID : team)
 		{
-			CWPlayer player = players.get(tempPlayers[i]);
-			teamStrength += player.getOverall(weights);
+			const CWPlayer& player = data.Players[playerID];
+			teamStrength += player.GetOverall(data.Weights);
 		}
 		return teamStrength;
 	}
 
-	public static double getTeamsDeltaStrength(List<CWPlayer> players, Weights.WeightsData weights, int[] tempPlayers, int[] teamSizes)
+	double GenerateTeams::GetTeamsDeltaStrength(const GenData& data)
 	{
-		int playerIndex = 0;
-		int teamIndex = 0;
 		double minStrength = 0.0, maxStrength = 0.0;
-		while (playerIndex < tempPlayers.length)
+		for (const auto& team : data)
 		{
-			int teamSize = teamSizes[teamIndex++];
-			double teamStrength = getTeamStrength(players, weights, tempPlayers, playerIndex, teamSize);
-			playerIndex += teamSize;
+			double teamStrength = GetTeamStrength(data, team);
 
 			if (minStrength == 0.0 || teamStrength < minStrength)
 			{
@@ -170,114 +217,85 @@ public class GenerateTeams
 	}
 
 
-	private static void printTeam(List<CWPlayer> players, Weights.WeightsData weights, int[] tempPlayers, int[] teamSizes, PrintStream output, int ordal)
+	void GenerateTeams::PrintTeam(const GenData& data, int ordal)
 	{
-		output.println("\nTEAM-SET #" + ordal + " - delta: " + NumberFormat.getInstance().format(getTeamsDeltaStrength(players, weights, tempPlayers, teamSizes)));
+		fprintf(data.Output, "\nTEAM-SET #%d - delta: %f\n", ordal, GetTeamsDeltaStrength(data));
 		int playerIndex = 0;
 		int teamIndex = 0;
-		while (playerIndex < tempPlayers.length)
+		for (const auto& team : data)
 		{
-			int teamSize = teamSizes[teamIndex++];
-			output.println("\tTeam #" + teamIndex + " strength " + NumberFormat.getInstance().format(getTeamStrength(players, weights, tempPlayers, playerIndex, teamSize)));
-			int[] ordering = Arrays.copyOfRange(tempPlayers, playerIndex, playerIndex + teamSize);
-			playerIndex += teamSize;
-			ordering = Arrays.stream(ordering).
-					boxed().
-					sorted(Comparator.comparing(players::get)). // sort ascending
-					mapToInt(i -> i).
-					toArray();
+			fprintf(data.Output, "\tTeam #%d strength %f\n", teamIndex, GetTeamStrength(data, team));
 
 			//Go in reverse to print the best players first
-			for (int j = teamSize - 1; j >= 0; j--)
+			for (auto playerID : team)
 			{
-				CWPlayer player = players.get(ordering[j]);
-				output.println("\t\t" + player.realName + " (" + player.username + ")");
+				CWPlayer& player = data.Players[playerID];
+				fprintf(data.Output, "\t\t%s (%s)", player.RealName.c_str(), player.Username.c_str());
 			}
-
+			teamIndex++;
 		}
 	}
 
-	private static Long getTeamsHash(List<CWPlayer> players, int[] tempPlayers, int[] teamSizes)
+	std::uint64_t GenerateTeams::GetTeamsHash(const GenData& data)
 	{
 		//Sort the hashes by value so that teams with players in a different order are still considered the same team
-		long[] teamHashes = new long[teamSizes.length];
-		int i = 0;
+		std::vector<std::uint64_t> teamHashes(data.Sizes.size());
 		int teamIndex = 0;
-		while (i < tempPlayers.length)
+		for (const auto& team : data)
 		{
-			int teamSize = teamSizes[teamIndex];
-			int[] individualHashes = new int[teamSize];
-			for (int j = 0; j < teamSize; j++)
+			std::vector<std::size_t> individualHashes(team.TeamSize);
 			{
-				individualHashes[j] = players.get(tempPlayers[i++]).hashCode();
+				int i = 0;
+				for (auto playerID : team)
+				{
+					individualHashes[i++] = playerID;
+				}
 			}
-			Arrays.sort(individualHashes);
-			long hash = 0;
-			for (int j = 0; j < teamSize; j++)
+			std::sort(individualHashes.begin(), individualHashes.end());
+			std::uint64_t hash = 1;
+			for (int i = 0; i < individualHashes.size(); i++)
 			{
-				int shift;
-				if (teamSize == 1)
-					shift = 0;
-				else//Increase the shift each iteration so that we get a juicy 64 bit hash for a team in the end
-					shift = 32 * j / (teamSize - 1);
-				hash ^= ((long) individualHashes[j]) << shift;
+				hash = 61 * hash + individualHashes[i];
 			}
-			teamHashes[teamIndex] = hash;
-			teamIndex++;
+			teamHashes[teamIndex++] = hash;
 		}
-		Arrays.sort(teamHashes);
+		std::sort(teamHashes.begin(), teamHashes.end());
 
-		//Copied from Arrays.hashCode and extended to 64 bits
-		long result = 1;
-		for (long val : teamHashes) {
-			result = 31 * result + val ^ val >>> 32;
+		std::uint64_t result = 1;
+		for (std::uint64_t val : teamHashes)
+		{
+			result = 31 * result + val;
 		}
 
 		return result;
 
 	}
 
-	private static boolean areTeamsValid(List<CWPlayer> players, List<PlayerRestrictor.PlayerRestriction> restrictions, Weights.WeightsData weights, int[] tempPlayers, int[] teamSizes, double neededAverage, double maxDev)
+	bool GenerateTeams::AreTeamsValid(const GenData& data)
 	{
-		int i = 0;
-		int teamIndex = 0;
-		while (i < tempPlayers.length)
+		for (const auto& team : data)
 		{
-			final int teamSize = teamSizes[teamIndex++];
-			double teamStrength = getTeamStrength(players, weights, tempPlayers, i, teamSize);
+			double teamStrength = GetTeamStrength(data, team);
 			//Make sure this team is within range of the max deviation
-			if (Math.abs(neededAverage - teamStrength) > maxDev)
+			if (std::abs(data.NeededTeamAverage - teamStrength) > data.MaxTeamDev)
 			{
 				//This team is too good or too bad...
-				teamValueFailedCount++;
+				s_TeamValueFailedCount++;
 				return false;
 			}
-			for (PlayerRestrictor.PlayerRestriction restriction : restrictions)
+			for (const auto& restriction : data.Restrictions)
 			{
-				if (!restriction.isValidTeam(players, tempPlayers, i, teamSize))
+				if (!restriction->IsValidTeam(data.Players, team))
 				{
-					playerRestrictionsFailedCount++;
+					s_PlayerRestrictionsFailedCount++;
 					return false;
 				}
 			}
-			i += teamSize;
 		}
 
 		return true;
 	}
 
 
-	private static final Random rand = new Random();
-
-	private static void shuffel(int[] array)
-	{
-		for (int i = 0; i < array.length; i++)
-		{
-			int randomIndexToSwap = rand.nextInt(array.length);
-			int temp = array[randomIndexToSwap];
-			array[randomIndexToSwap] = array[i];
-			array[i] = temp;
-		}
-	}
-
 }
+

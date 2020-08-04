@@ -1,0 +1,6 @@
+[requires]
+argparse/2.1
+spdlog/1.7.0
+
+[generators]
+cmake

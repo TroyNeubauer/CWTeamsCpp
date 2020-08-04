@@ -1,170 +1,161 @@
-package com.troy.cwteams;
+#include "Main.h"
+
+#include "PlayerRestrictor.h"
+#include "Weights.h"
+#include "RatingsReader.h"
+#include "GenerateTeams.h"
+
+#include <filesystem>
+
+#include <spdlog/spdlog.h>
+#include <argparse/argparse.hpp>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 
-import com.diogonunes.jcolor.Ansi;
-import com.diogonunes.jcolor.Attribute;
-import net.sourceforge.argparse4j.ArgumentParsers;
-import net.sourceforge.argparse4j.inf.ArgumentParser;
-import net.sourceforge.argparse4j.inf.ArgumentParserException;
-import net.sourceforge.argparse4j.inf.Namespace;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.PrintStream;
-import java.util.List;
-
-class Main
+FILE* CreateOutput(const std::string& outPath)
 {
-	public static void error(String message)
+	return stdout;
+}
+
+using namespace CWTeams;
+
+int main(int argc, const char** argv)
+{
+	Log::Init();
+
+	argparse::ArgumentParser parser("CWTeams");
+
+	//.description("An automated team balancing program made for perverted cake wars by Troy Neubauer");
+
+	parser.add_argument("--file", "-f")
+			.default_value("cw.xlsx")
+			.help("Specifies the input file to get the player list and ranking matrix");
+
+	parser.add_argument("--weights-file", "-wf")
+			.default_value("weights.xlsx")
+			.help("Specifies the file containing weights for different team sizes");
+
+	parser.add_argument("--max-deviation", "-m")
+			.default_value(1.0).action([](const std::string& value) { return std::stod(value); })
+			.help("Indicates the max deviation in the total ranking across teams");
+
+	parser.add_argument("--limit", "-l")
+			.default_value(1000).action([](const std::string& value) { return std::stoi(value); })
+			.help("Sets a limit for the max number of permeated teams to be generated");
+
+	parser.add_argument("--teams", "-t")
+			.required().action([](const std::string& value) { return std::stoi(value); })
+			.help("How many teams should be made from the bundle of players");
+
+	parser.add_argument("--separate", "-r")
+			.remaining()
+			.help("Indicates a binary seperation between two players using a colon. using --separate troy:chas will force the algorithm to make teams where chas and troy are on different teams");
+
+	parser.add_argument("--output", "-o")
+			.help("Write the list of teams to the specified file");
+
+	parser.add_argument("--sort", "-s")
+			.default_value(true).action([](const std::string& value) { return value == "true"; })
+			.help("Waits until the program terminates to print the output (sorted from worst to best)");
+
+	parser.add_argument("--timeout")
+			.default_value(15).action([](const std::string& value) { return std::stoi(value); })
+			.help("How long the program can generate no more teams for until it exits");
+
+
+	try
 	{
-		System.out.println(Ansi.colorize("CWTeams: " + message, Attribute.BLACK_TEXT(), Attribute.RED_BACK()));
-	}
+		GenParameters params;
 
-	public static void fatal(String message)
-	{
-		System.out.println(Ansi.colorize("CWTeams: " + message, Attribute.BLACK_TEXT(), Attribute.RED_BACK()));
-		System.exit(1);
-	}
+		parser.parse_args(argc, argv);
 
-	public static void info(String message)
-	{
-		System.out.println("CWTeams: " + message);
-	}
-
-	public static void success(String message)
-	{
-		System.out.println(Ansi.colorize("CWTeams: ", Attribute.GREEN_TEXT()) + message);
-	}
-
-	public static void warn(String message)
-	{
-		System.out.println(Ansi.colorize("CWTeams: " + message, Attribute.TEXT_COLOR(255,140,0)));
-	}
-
-
-	public static void main(String[] args)
-	{
-		ArgumentParser parser = ArgumentParsers.newFor("CWTeams").build()
-				.description("An automated team balancing program made for perverted cake wars by Troy Neubauer");
-
-		parser.addArgument("--file", "-f")
-				.dest("file").setDefault("cw.xlsx")
-				.help("Specifies the input file to get the player list and ranking matrix");
-
-		parser.addArgument("--weights-file", "-wf")
-				.dest("weights-file").setDefault("weights.xlsx")
-				.help("Specifies the file containing weights for different team sizes");
-
-		parser.addArgument("--max-deviation", "-m")
-				.dest("maxDev").setDefault(1.0).type(Double.class)
-				.help("Indicates the max deviation in the total ranking across teams");
-
-		parser.addArgument("--limit", "-l")
-				.dest("limitCount").setDefault(1000).type(Integer.class)
-				.help("Sets a limit for the max number of permeated teams to be generated");
-
-		parser.addArgument("--teams", "-t")
-				.dest("teams").required(true).type(Integer.class)
-				.help("How many teams should be made from the bundle of players");
-
-		parser.addArgument("--separate", "-r")
-				.dest("restrictions").nargs("+")
-				.help("Indicates a binary seperation between two players using a colon. using --separate troy:chas will force the algorithm to make teams where chas and troy are on different teams");
-
-		parser.addArgument("--output", "-o")
-				.dest("outputFile")
-				.help("Write the list of teams to the specified file");
-
-		parser.addArgument("--sort", "-s")
-				.dest("sort").type(Boolean.class).setDefault(true)
-				.help("Waits until the program terminates to print the output (sorted from worst to best)");
-
-		parser.addArgument("--timeout")
-				.dest("timeout").setDefault(15).type(Integer.class)
-				.help("How long the program can generate no more teams for until it exits");
-
-
-		try
+		std::string cwFile = parser.get<std::string>("--file");
+		if (!std::filesystem::exists(cwFile))
 		{
-			Namespace res = parser.parseArgs(args);
-
-			String fileStr = res.get("file");
-			File cwFile = new File(fileStr);
-			if (!cwFile.exists())
-			{
-				fatal("Failed to find file \"" + fileStr + "\"");
-			}
-			success("Found input file \"" + fileStr + "\"");
-
-			String weightsFileStr = res.get("weights-file");
-			File weightsFile = new File(weightsFileStr);
-			if (!weightsFile.exists())
-			{
-				fatal("Failed to find weights file \"" + fileStr + "\"");
-			}
-			success("Found input weights file \"" + weightsFile + "\"");
-
-			Weights weights = Weights.load(weightsFile);
-
-			List<CWPlayer> players = RatingsReader.parsePlayers(cwFile);
-			List<PlayerRestrictor.PlayerRestriction> restrictions = PlayerRestrictor.restrict(players, res.get("restrictions"));
-
-			double maxDev = res.get("maxDev");
-			int limitOutput = res.get("limitCount");
-			int teamCount = res.get("teams");
-			boolean sort = res.get("sort");
-			int timeout = res.get("timeout");
-			info(sort ? "Sorting results" : "Not sorting results");
-
-
-			String outputFile = res.get("outputFile");
-			PrintStream output = createOutput(outputFile);
-
-			info("Using a max deviation of +-" + maxDev + " rating points");
-			info("Using a timeout of " + timeout + " seconds");
-			info("Limiting output to " + limitOutput + " permutations");
-			info("Generating " + teamCount + " teams with a total playerbase of " + players.size() + " players");
-			GenerateTeams.gen(players, restrictions, weights, maxDev, limitOutput, teamCount, output, sort, timeout);
-			if (outputFile != null)
-			{
-				output.close();
-			}
-
+			CW_FATAL("Failed to find file \"" + cwFile + "\"");
 		}
-		catch (ArgumentParserException e)
+		CW_SUCCESS("Found input file \"" + cwFile + "\"");
+
+		std::string weightsFile = parser.get<std::string>("--weights-file");
+		if (!std::filesystem::exists(weightsFile))
 		{
-			parser.handleError(e);
+			CW_FATAL("Failed to find weights file \"" + weightsFile + "\"");
+		}
+		CW_SUCCESS("Found input weights file \"" + weightsFile + "\"");
+
+		Weights::Load(weightsFile, params.WeightsMap);
+
+		RatingsReader::ParsePlayers(cwFile, params.Players);
+		PlayerRestrictor::Restrict(params.Players, parser.get<std::vector<std::string>>("--separate"), params.Restrictions);
+
+		double maxDev = parser.get<double>("--max-deviation");
+		int limitOutput = parser.get<int>("--limit");
+		int teamCount = parser.get<int>("--teams");
+		bool sort = parser.get<bool>("--sort");
+		int timeout = parser.get<int>("--timeout");
+		CW_INFO(sort ? "Sorting results" : "Not sorting results");
+
+
+		std::string outputFile = parser.get<std::string>("--output");
+		FILE* output = CreateOutput(outputFile);
+
+
+		CW_INFO("Using a max deviation of +-{} rating points", maxDev);
+		CW_INFO("Using a timeout of {} seconds", timeout);
+		CW_INFO("Limiting output to {} permutations", limitOutput);
+		CW_INFO("Generating {} teams with a total playerbase of {} players", teamCount, players.size());
+
+
+		GenerateTeams::Gen(params);
+		if (outputFile.size())
+		{
+			fclose(output);
 		}
 
 	}
-
-	private static PrintStream createOutput(String outputFile)
+	catch (const std::runtime_error& err)
 	{
-		if (outputFile == null)
-		{
-			info("Printing teams output to stdout");
-			return System.out;
-		}
-		else
-		{
-			try
-			{
-				info("Printing teams output to file \"" + outputFile + "\"");
-				File file = new File(outputFile);
-				if (file.exists())
-				{
-					file.delete();
-				}
-				return new PrintStream(new FileOutputStream(file));
-			}
-			catch (Exception e)
-			{
-				error("Failed to open output file \"" + outputFile + "\"");
-				e.printStackTrace();
-				System.exit(1);
-				return null;//Make the compiler happy
-			}
-		}
+		CW_FATAL(err.what());
+	}
+
+}
+
+
+namespace CWTeams
+{
+	volatile bool Log::s_Init = false;
+	
+	std::unique_ptr<spdlog::logger> Log::s_Logger(nullptr);
+
+	void Log::Init()
+	{
+
+		if (s_Init) return;
+
+		bool useFiles = true;
+		std::string consolePattern = "%^[%T] %n: %$%v", filePattern = "%n-%t:[%D %H:%M %S.%e] %l: %v";
+
+
+		auto stdOut = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+		stdOut->set_pattern(consolePattern);
+
+		s_Logger.reset(new spdlog::logger("Null.Black", { stdOut }));
+
+		stdOut->set_level(spdlog::level::level_enum::trace);
+		s_Logger->set_level(spdlog::level::level_enum::trace);
+
+		Log::s_Init = true;
+		CW_TRACE("Logging Initalized");
+	}
+
+	void Log::Shutdown()
+	{
+
+		s_Init = false;
+		CW_TRACE("Destroying logging");
+		s_Logger.reset(nullptr);
+		
 	}
 
 }
