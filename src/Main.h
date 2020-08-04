@@ -43,20 +43,32 @@ namespace CWTeams
 
 
 int main(int argc, const char** argv);
-/*
-#define CW_SUCCESS(...)				CW_TRACE(__VA_ARGS__)
-#define CW_TRACE(...)				::CWTeams::Log::GetLogger()->trace(__VA_ARGS__)
-#define CW_INFO(...)				::CWTeams::Log::GetLogger()->info(__VA_ARGS__)
-#define CW_WARN(...)				::CWTeams::Log::GetLogger()->warn(__VA_ARGS__)
-#define CW_ERROR(...)				::CWTeams::Log::GetLogger()->error(__VA_ARGS__)
-#define CW_FATAL(...)			  { ::CWTeams::Log::GetLogger()->critical(__VA_ARGS__); exit(1); }
-#define CW_LOG(level, ...)          ::CWTeams::Log::GetLogger()->log(level, __VA_ARGS__)
-*/
 
-#define CW_SUCCESS(...)
-#define CW_TRACE(...)
-#define CW_INFO(...)
-#define CW_WARN(...)
-#define CW_ERROR(...)
-#define CW_FATAL(...)
-#define CW_LOG(level, ...)
+#if 1
+
+	#define CW_SUCCESS(...)				CW_TRACE(__VA_ARGS__)
+	#define CW_TRACE(...)				::CWTeams::Log::GetLogger()->trace(__VA_ARGS__)
+	#define CW_INFO(...)				::CWTeams::Log::GetLogger()->info(__VA_ARGS__)
+	#define CW_WARN(...)				::CWTeams::Log::GetLogger()->warn(__VA_ARGS__)
+	#define CW_ERROR(...)				::CWTeams::Log::GetLogger()->error(__VA_ARGS__)
+
+	#ifdef _WIN32
+		#define CW_FATAL(...)			  { ::CWTeams::Log::GetLogger()->critical(__VA_ARGS__); system("PAUSE"); exit(1); }
+	#else
+		#define CW_FATAL(...)			  { ::CWTeams::Log::GetLogger()->critical(__VA_ARGS__); exit(1); }
+	#endif
+
+	#define CW_LOG(level, ...)          ::CWTeams::Log::GetLogger()->log(level, __VA_ARGS__)
+
+#else
+
+	#define CW_SUCCESS(...)
+	#define CW_TRACE(...)
+	#define CW_INFO(...)
+	#define CW_WARN(...)
+	#define CW_ERROR(...)
+	#define CW_FATAL(...)
+	#define CW_LOG(level, ...)
+
+#endif
+

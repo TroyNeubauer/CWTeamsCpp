@@ -11,9 +11,6 @@
 #include "Weights.h"
 #include "Main.h"
 
-#include <algorithm>
-#include <random>
-
 namespace CWTeams
 {
 

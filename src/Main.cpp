@@ -29,11 +29,11 @@ int main(int argc, const char** argv)
 	//.description("An automated team balancing program made for perverted cake wars by Troy Neubauer");
 
 	parser.add_argument("--file", "-f")
-			.default_value("cw.xlsx")
+			.default_value(std::string("cw.xlsx"))
 			.help("Specifies the input file to get the player list and ranking matrix");
 
 	parser.add_argument("--weights-file", "-wf")
-			.default_value("weights.xlsx")
+			.default_value(std::string("weights.xlsx"))
 			.help("Specifies the file containing weights for different team sizes");
 
 	parser.add_argument("--max-deviation", "-m")
@@ -87,31 +87,48 @@ int main(int argc, const char** argv)
 		Weights::Load(weightsFile, params.WeightsMap);
 
 		RatingsReader::ParsePlayers(cwFile, params.Players);
-		PlayerRestrictor::Restrict(params.Players, parser.get<std::vector<std::string>>("--separate"), params.Restrictions);
 
-		double maxDev = parser.get<double>("--max-deviation");
-		int limitOutput = parser.get<int>("--limit");
-		int teamCount = parser.get<int>("--teams");
-		bool sort = parser.get<bool>("--sort");
-		int timeout = parser.get<int>("--timeout");
-		CW_INFO(sort ? "Sorting results" : "Not sorting results");
+		std::vector<std::string> restrictionStrings;
+		try
+		{
+			restrictionStrings = parser.get<std::vector<std::string>>("--separate");
+		}
+		catch (std::logic_error& e) {
+			std::cout << "No files provided" << std::endl;
+		}
+		PlayerRestrictor::Restrict(params.Players, restrictionStrings, params.Restrictions);
+
+		params.MaxDev = parser.get<double>("--max-deviation");
+		params.LimitOutput = parser.get<int>("--limit");
+		params.TeamCount = parser.get<int>("--teams");
+		params.Sort = parser.get<bool>("--sort");
+		params.TimeoutSeconds = parser.get<int>("--timeout");
+
+		try {
+			std::string outputFile = parser.get<std::string>("--output");
+			params.Output = CreateOutput(outputFile);
+		} catch (std::logic_error& e) {
+			params.Output = stdout;
+		}
 
 
-		std::string outputFile = parser.get<std::string>("--output");
-		FILE* output = CreateOutput(outputFile);
-
-
-		CW_INFO("Using a max deviation of +-{} rating points", maxDev);
-		CW_INFO("Using a timeout of {} seconds", timeout);
-		CW_INFO("Limiting output to {} permutations", limitOutput);
-		CW_INFO("Generating {} teams with a total playerbase of {} players", teamCount, players.size());
+		CW_INFO("Using a max deviation of +-{} rating points", params.MaxDev);
+		CW_INFO(params.Sort ? "Sorting results" : "Not sorting results");
+		CW_INFO("Using a timeout of {} seconds", params.TimeoutSeconds);
+		CW_INFO("Limiting output to {} permutations", params.LimitOutput);
+		CW_INFO("Generating {} teams with a total playerbase of {} players", params.TeamCount, params.Players.size());
 
 
 		GenerateTeams::Gen(params);
-		if (outputFile.size())
+		if (params.Output != stdout)
 		{
-			fclose(output);
+			fclose(params.Output);
 		}
+
+#ifdef _WIN32
+		//system("PAUSE");
+#endif
+
 
 	}
 	catch (const std::runtime_error& err)

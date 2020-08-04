@@ -2,6 +2,11 @@
 #include "Weights.h"
 
 #include "Main.h"
+#include <math.h>
+#include <algorithm>
+#include <numeric>
+
+#include "ExcelUtils.h"
 
 namespace CWTeams
 {
@@ -11,35 +16,33 @@ namespace CWTeams
 		std::stringstream ss;
 		for (int i = 0; i < teamSizes.size(); i++)
 		{
-			ss << teamSizes[i];
+			ss << (int) teamSizes[i];
 			if ( i < teamSizes.size() - 1)
 			{
 				ss << "v";
 			}
 		}
 		std::string query = ss.str();
-		info("Searching for situation \"" + query + "\" in the situations pool");
-		WeightsData data = weightsMap.get(query);
-		if (data == null)
+		CW_INFO("Searching for situation \"{}\" in the situations pool", query);
+		auto dataIt = weightsMap.find(query);
+		if (dataIt == weightsMap.end())
 		{
-			OptionalDouble optionalAverage = IntStream.of(teamSizes).mapToDouble(Double::valueOf).average();
-			if (!optionalAverage.isPresent()) { CW_FATAL("Failed to average numbers " + Arrays.toString(teamSizes)); return null; }
+			double average = std::accumulate(teamSizes.begin(), teamSizes.end(), 0.0) / teamSizes.size();
 
-			String oldQuery = query;
-			query = ((int) (Math.floor(optionalAverage.getAsDouble() + 0.49999))) + "v";
+			std::string oldQuery = query;
+			query = std::to_string((int) (std::floor(average + 0.49999))) + "v";
 
-			info("Failed to find \"" + oldQuery + "\". Searching for situation \"" + query + "\" in the situations pool");
-			data = weightsMap.get(query);
-			if (data == null)
+			CW_INFO("Failed to find \"{}\". Searching for situation \"{}\" in the situations pool", oldQuery, query);
+			dataIt = weightsMap.find(query);
+			if (dataIt == weightsMap.end())
 			{
-				CW_FATAL("Failed to find situation \"" + query + "\" after 2 attempts. Also tried \"" + oldQuery + "\"");
-				return null;
+				CW_FATAL("Failed to find situation \"{}\" after 2 attempts. Also tried \"{}\"", query, oldQuery);
 			}
 		}
 
-		success("Found situation \"" + query + "\" in the situations pool");
-		info("Applying weights: pvp: " + data.pvp + ", gamesense: " + data.gamesense + ", teamwork: " + data.teamwork);
-		return data;
+		CW_SUCCESS("Found situation \"{}\" in the situations pool", query);
+		CW_INFO("Applying weights: pvp: {}, gamesense: {}, teamwork: {}", dataIt->second.PVP, dataIt->second.Gamesense, dataIt->second.Teamwork);
+		return dataIt->second;
 	}
 
 	void Weights::Load(const std::string& file, Weights& result)
@@ -47,33 +50,44 @@ namespace CWTeams
 		result.weightsMap.clear();
 		try
 		{
-			Workbook workbook = WorkbookFactory.create(file);
-			Sheet sheet = workbook.getSheetAt(0);
-
-			int situationCol = ExcelUtils.getCol(sheet, "Situation");
-			int pvpCol = ExcelUtils.getCol(sheet, "PVP");
-			int gamesenseCol = ExcelUtils.getCol(sheet, "Gamesense");
-			int teamworkCol = ExcelUtils.getCol(sheet, "Teamwork");
-
-			for (int rowInt = 1; sheet.getRow(rowInt) != null; rowInt++)
+			xlnt::path path(file);
+			xlnt::workbook workbook(path);
+			if (workbook.sheet_count() > 1)
 			{
-				String situation = ExcelUtils.getString(sheet, rowInt, situationCol);
-				double pvpWeight = ExcelUtils.getDouble(sheet, rowInt, pvpCol);
-				double gamesenseWeight = ExcelUtils.getDouble(sheet, rowInt, gamesenseCol);
-				double teamworkWeight = ExcelUtils.getDouble(sheet, rowInt, teamworkCol);
+				CW_WARN("Excel file contains mutiple sheets! Choosing the first one");
+			}
+			xlnt::worksheet sheet = workbook.active_sheet();
+
+			xlnt::column_t situationCol = ExcelUtils::GetCol(sheet, "Situation");
+			xlnt::column_t pvpCol = ExcelUtils::GetCol(sheet, "PVP");
+			xlnt::column_t gamesenseCol = ExcelUtils::GetCol(sheet, "Gamesense");
+			xlnt::column_t teamworkCol = ExcelUtils::GetCol(sheet, "Teamwork");
+
+
+			xlnt::row_t startRow = 2;
+
+			xlnt::row_t row = sheet.lowest_row();
+			xlnt::column_t col = sheet.lowest_column();
+			for (; sheet.has_cell(xlnt::cell_reference(col, row)); row++)
+			{
+				//Skip the header
+				if (row < startRow) continue;
+
+				std::string situation = ExcelUtils::GetString(sheet, row, situationCol);
+				double pvpWeight = ExcelUtils::GetDouble(sheet, row, pvpCol);
+				double gamesenseWeight = ExcelUtils::GetDouble(sheet, row, gamesenseCol);
+				double teamworkWeight = ExcelUtils::GetDouble(sheet, row, teamworkCol);
 
 				double sum = pvpWeight + gamesenseWeight + teamworkWeight;
 				if (sum != 1.0)
 				{
-					CW_FATAL("Weights don't sum to 1! In situation row \"" + situation + "\" pvp: " + pvpWeight + ", gamesense: " + gamesenseWeight + ", teamwork: " + teamworkWeight + " Sum to: " + sum + "!");
+					CW_FATAL("Weights don't sum to 1! In situation row \"{}\" pvp: {}, gamesense: {}, teamwork: {} Sum to: {}!", situation, pvpWeight, gamesenseWeight, teamworkWeight, sum);
 				}
-				CW_SUCCESS("Read situation weights: \"" + situation + "\" = pvp: " + pvpWeight + ", gamesense: " + gamesenseWeight + ", teamwork: " + teamworkWeight);
-				result.weightsMap.put(situation, new WeightsData(pvpWeight, gamesenseWeight, teamworkWeight));
+				CW_SUCCESS("Read situation weights: \"{}\" = pvp: {}, gamesense: {}, teamwork: {}", situation, pvpWeight, gamesenseWeight, teamworkWeight);
+				result.weightsMap[situation] = WeightsData { pvpWeight, gamesenseWeight, teamworkWeight };
 			}
 
-			CW_SUCCESS("Parsed " + result.weightsMap.size() + " weights successfully");
-			workbook.close();
-			return result;
+			CW_SUCCESS("Parsed {} weights successfully", result.weightsMap.size());
 		}
 		catch (std::exception& e)
 		{

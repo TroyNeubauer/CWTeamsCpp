@@ -1,6 +1,9 @@
 
 #include "GenerateTeams.h"
 
+#include <algorithm>
+#include <random>
+
 namespace CWTeams
 {
 
@@ -39,8 +42,8 @@ namespace CWTeams
 	{
 		if (TeamIndex == Data->Sizes.size())
 			CW_FATAL("Iterator out of range");
-		TeamIndex++;
 		PlayerIndex += Data->Sizes[TeamIndex];
+		TeamIndex++;
 	}
 
 	bool ConstTeamIterator::operator!=(const ConstTeamIterator& other)
@@ -51,7 +54,7 @@ namespace CWTeams
 
 	long s_TeamValueFailedCount, s_PlayerRestrictionsFailedCount;
 	std::vector<TeamSet> s_TeamResults;
-
+	auto s_RNG = std::default_random_engine{};
 
 	void GenerateTeams::Gen(GenParameters& params)
 	{
@@ -61,6 +64,7 @@ namespace CWTeams
 		std::uint64_t TIMEOUT = params.TimeoutSeconds * 1000;
 
 		GenData data { params.Players, params.Restrictions, params.Output };
+		data.MaxTeamDev = params.MaxDev;
 		data.Sizes.resize(params.TeamCount);
 		
 		for (int i = 0; i < params.Players.size(); i++)
@@ -75,7 +79,7 @@ namespace CWTeams
 			ss << "Match is set for: ";
 			for (int i = 0; i < data.Sizes.size(); i++)
 			{
-				ss << data.Sizes[i];
+				ss << (int) data.Sizes[i];
 				if ( i < data.Sizes.size() - 1)
 				{
 					ss << " v ";
@@ -106,8 +110,8 @@ namespace CWTeams
 
 		//This set contains hashes of the team combos that we already tried so that we don't repeat
 		std::set<std::uint64_t> combinationsTried;
-		std::chrono::time_point start = std::chrono::system_clock::now();
-		std::chrono::time_point lastOption = std::chrono::system_clock::now();
+		auto start = std::chrono::steady_clock::now();
+		auto lastOption = std::chrono::steady_clock::now();
 
 		//Initialize counters to 0
 		long comboCount = 0;
@@ -116,24 +120,24 @@ namespace CWTeams
 		CW_INFO("Searching for teams... this may take a while");
 		for (int validOptions = 0; validOptions < params.LimitOutput; )
 		{
-			std::random_shuffle(data.Teams.begin(), data.Teams.end());
+			std::shuffle(data.Teams.begin(), data.Teams.end(), s_RNG);
 			comboCount++;
-			std::chrono::time_point singleStart = std::chrono::system_clock::now();
+			auto singleStart = std::chrono::steady_clock::now();
 			while (!AreTeamsValid(data))
 			{
-				if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - singleStart).count() > TIMEOUT)
+				if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - singleStart).count() > TIMEOUT)
 				{
 					PrintResults(data);
 					CW_FATAL("Failed to find more team combination after {} seconds! Tried {} combinations to no avail", TIMEOUT / 1000, comboCount);
 				}
-				std::random_shuffle(data.Teams.begin(), data.Teams.end());
+				std::shuffle(data.Teams.begin(), data.Teams.end(), s_RNG);
 				comboCount++;
 			}
-			long hash = GetTeamsHash(data);
-			if (combinationsTried.find(hash) != combinationsTried.end())
+			std::uint64_t hash = GetTeamsHash(data);
+			if (combinationsTried.find(hash) == combinationsTried.end())
 			{
 				//We found a valid configuration
-				lastOption = std::chrono::system_clock::now();
+				lastOption = std::chrono::steady_clock::now();
 				validOptions++;
 				combinationsTried.insert(hash);
 				if (params.Sort)
@@ -149,7 +153,7 @@ namespace CWTeams
 			else
 			{
 				//Check for timeout in case we already found all possible teams
-				if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - lastOption).count() > TIMEOUT)
+				if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - lastOption).count() > TIMEOUT)
 				{
 					CW_WARN("Failed to find more team combinations after {} seconds! Low search space? Exiting!", TIMEOUT / 1000);
 					break;
@@ -158,8 +162,8 @@ namespace CWTeams
 			}
 		}
 
+		double seconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count() / 1000.0;
 		PrintResults(data);
-		double seconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count() / 1000.0;
 		CW_SUCCESS("Generated {} valid team possibilities in {} seconds", combinationsTried.size(), seconds);
 		CW_SUCCESS("Evaluated {} possible configurations", comboCount);
 
@@ -172,11 +176,16 @@ namespace CWTeams
 
 	void GenerateTeams::PrintResults(GenData& data)
 	{
-		std::sort(s_TeamResults.begin(), s_TeamResults.end(), [data](const TeamSet& a, const TeamSet& b) {
-			std::copy(a.begin(), a.end(), data.Teams.begin());
+		std::sort(s_TeamResults.begin(), s_TeamResults.end(), [&data](TeamSet& a, TeamSet& b) {
+			data.Teams = std::move(a);
 			double aStrength = GetTeamsDeltaStrength(data);
-			std::copy(b.begin(), b.end(), data.Teams.begin());
-			return aStrength < GetTeamsDeltaStrength(data);
+			a = std::move(data.Teams);
+
+			data.Teams = std::move(b);
+			double bStrength = GetTeamsDeltaStrength(data);
+			b = std::move(data.Teams);
+			
+			return aStrength > bStrength;
 		});
 		int i = 0;
 		for (auto& team : s_TeamResults)
@@ -230,7 +239,7 @@ namespace CWTeams
 			for (auto playerID : team)
 			{
 				CWPlayer& player = data.Players[playerID];
-				fprintf(data.Output, "\t\t%s (%s)", player.RealName.c_str(), player.Username.c_str());
+				fprintf(data.Output, "\t\t%s (%s)\n", player.RealName.c_str(), player.Username.c_str());
 			}
 			teamIndex++;
 		}

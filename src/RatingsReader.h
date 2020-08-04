@@ -63,7 +63,7 @@ namespace CWTeams
 
 		static std::pair<std::string, std::string> ParseNames(const std::string& rawName)
 		{
-			int space = rawName.find(' ');
+			std::size_t space = rawName.find(' ');
 			if (space == std::string::npos)
 			{
 				CW_FATAL("Failed to find space in the name of player: {}", rawName);
@@ -78,14 +78,14 @@ namespace CWTeams
 			std::vector<xlnt::row_t> result;
 
 			xlnt::row_t row = sheet.lowest_row();
-			for (; sheet.has_cell(xlnt::cell_reference(col, row)); col++)
+			for (; sheet.has_cell(xlnt::cell_reference(col, row)); row++)
 			{
 				//Skip the header
 				if (row < startRow) continue;
 				xlnt::cell cell = sheet.cell(col, row);
 				if (cell.data_type() == xlnt::cell_type::inline_string || cell.data_type() == xlnt::cell_type::shared_string)
 				{
-					if (cell.height() == 0.0)
+					if (sheet.row_properties(row).hidden)
 					{
 						CW_INFO("Skipping player: \"{}\" because their row has zero height", cell.value<std::string>());
 					}
